@@ -1,0 +1,12 @@
+# game binaries and backups never go in this repo
+*.exe
+*.dll
+*.asi
+*.bak
+*.before-*
+# analysis artifacts
+__pycache__/
+*.pkl
+*.log
+*.json
+lab/
