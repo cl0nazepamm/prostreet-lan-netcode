@@ -7,8 +7,10 @@
    are extrapolated for ~66 ms between updates. The scheduler's `fadd qword [0x9713D8]` (a 1/15 constant
    shared with unrelated code) is pointed at a private double in unused int3 padding holding 1/RATE.
    The 1/15 s resync threshold is left alone.
+3. Large address aware: sets the LAA header bit (4 GB instead of 2 GB on 64-bit Windows), buying time
+   against the netcode memory leak. --no-laa clears it again.
 
-Usage: python nfs_lan_patch.py SRC_EXE DST_EXE [--rate HZ]   (HZ=15 restores the stock send rate)
+Usage: python nfs_lan_patch.py SRC_EXE DST_EXE [--rate HZ] [--no-laa]   (HZ=15 restores the stock send rate)
 Refuses to touch anything that doesn't match the expected bytes.
 """
 import struct, sys, argparse
@@ -34,7 +36,7 @@ def file_offset(data, va):
     raise SystemExit(f'{va:#x} not in any section')
 
 
-def patch(src, dst, rate):
+def patch(src, dst, rate, laa=True):
     data = bytearray(open(src, 'rb').read())
     at = lambda va, n: bytes(data[file_offset(data, va):file_offset(data, va) + n])
     def put(va, b):
@@ -67,14 +69,20 @@ def patch(src, dst, rate):
     else:
         put(RATE_CONST, struct.pack('<d', 1.0 / rate)); put(SEND_FADD, ours_fadd)
 
+    # --- 3. large address aware (FILE_HEADER.Characteristics bit 0x20)
+    chars = struct.unpack_from('<I', data, 0x3C)[0] + 22
+    flags = struct.unpack_from('<H', data, chars)[0]
+    struct.pack_into('<H', data, chars, flags | 0x20 if laa else flags & ~0x20)
+
     open(dst, 'wb').write(data)
     print(f'clock fix: {len(CLOCK_SITES)} sites ({"already" if states[0] == "new" else "newly"} patched); '
-          f'CarState send rate: {rate} Hz -> {dst}')
+          f'CarState send rate: {rate} Hz; large address aware: {"on" if laa else "off"} -> {dst}')
 
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('src'); ap.add_argument('dst')
     ap.add_argument('--rate', type=int, default=60, choices=[15, 20, 30, 40, 60])
+    ap.add_argument('--no-laa', action='store_true')
     a = ap.parse_args()
-    patch(a.src, a.dst, a.rate)
+    patch(a.src, a.dst, a.rate, laa=not a.no_laa)

@@ -15,6 +15,7 @@ exact original bytes at every site before writing anything.
 | 2 | `bombd.exe`, `rebroadcasterlan.exe` | Main loops idle with `Sleep(10)` and never raise timer resolution, so every tick is ~15.6 ms. Every relayed message waits for ticks. | Entry-point stub: `SetProcessInformation` (Windows 11 must honor timer resolution for windowless processes) + `timeBeginPeriod(1)`; main-loop `Sleep(10)` → `Sleep(1)`. | bombd reply: mean 9.6 → **1.6 ms**, max 17.3 → 4.0 ms. Rebroadcaster reaction: mean 15.1 → **2.0 ms**, max 24 → 2.5 ms. |
 | 3 | `nfs.exe` | In LAN races the main loop takes its frame `dt` from a network clock built on `GetTickCount()`, which only advances every 15.625 ms. At high FPS most frames get `dt = 0`, then a 16 ms jump: physics runs in bursts and your **own car judders** (solo races use QPC and are smooth). | The 11 `GetTickCount` reads that make up that clock (all relative to the shared base at `0xB30800`) now read `timeGetTime()` — same signature, 1 ms resolution (the game already calls `timeBeginPeriod(1)`). IAT operand swaps only. | Sim ticks arriving after a >2× gap: **7.9 % → 0 %**; p99 gap 16.3 → 5.1 ms. |
 | 4 | `nfs.exe` | Each client sends `OLMSG_CarState` for its cars (player + any AI it hosts) at **15 Hz**; opponents are extrapolated for ~66 ms + latency between updates. | The send scheduler's `fadd qword [0x9713D8]` (a 1/15 constant shared with unrelated code) is pointed at a private double in unused `int3` padding at `0x7C2338`. Default **60 Hz**; 15/20/30/40/60 selectable. | Stock 15 Hz confirmed on the wire (see protocol notes). 60 Hz: opponents visibly tighter; not yet measured on the wire. |
+| 5 | all three | 32-bit, not large-address-aware: 2 GB each, and the netcode leaks while racing (below). | Set `IMAGE_FILE_LARGE_ADDRESS_AWARE` (one header bit) → 4 GB on 64-bit Windows. On by default; `--no-laa` / `-NoLAA` clears it. | Roughly doubles the time before a leak-induced crash. Server pair re-tested in a sandbox (bombd reply mean 1.33 ms). |
 
 FusionFix (`NFSProStreet.FusionFix.asi`, `Win11LANFix = 1`) already fixes the same `AF_UNSPEC` bug in the
 **client**; see xan1242's [WidescreenFixesPack PR #1336](https://github.com/ThirteenAG/WidescreenFixesPack/pull/1336),
@@ -31,7 +32,8 @@ even after the race ends (measured with `tools/memlog.py`, 60 Hz, 2 players + AI
 | `rebroadcasterlan.exe` | ~34 MB/min |
 | `nfs.exe` | ~20 MB/min |
 
-None of the exes is large-address-aware, so they die at ~2 GB. The bombd : rebroadcaster ratio (≈3 : 2)
+The stock exes aren't large-address-aware, so they die at ~2 GB; with fix 5 the limit is ~4 GB (roughly
+double the racing time, still not a fix). The bombd : rebroadcaster ratio (≈3 : 2)
 matches unreliable packets *sent*, which points at the shared netcode library keeping a per-send record
 (bombd has an `AckPacketRecord` allocation tag) that is never released because unreliable packets are never
 acked — unverified. It exists in the stock game too; 15 Hz just made it slow. Workaround: **File → Restart**
@@ -58,7 +60,8 @@ powershell -ExecutionPolicy Bypass -File .\ProStreet-LAN-fix.ps1 [-Rate 60]
 ```
 
 Keep the originals; the PowerShell script keeps the first `nfs.exe.before-lanfix` backup. `--rate 15` /
-`-Rate 15` restores the stock send rate (byte-identical to the clock-fix-only exe).
+`-Rate 15` restores the stock send rate; add `--no-laa` / `-NoLAA` to also drop the 4 GB flag (that combination
+is the clock-fix-only exe). The server patcher also takes `--no-laa`.
 
 **Settings:** both players should use the same FusionFix `SimRate` if remote cars look off
 (we run `-1` on a 240 Hz and a 144 Hz monitor and it's fine after fixes 3 + 4).
@@ -67,9 +70,9 @@ Keep the originals; the PowerShell script keeps the first `nfs.exe.before-lanfix
 
 | file | original | patched |
 |---|---|---|
-| `nfs.exe` | `06e4237e74ccd8cd6625b19058ca1e96` | 60 Hz `ebc5ca028929e999a3be9174307a4241` · 30 Hz `ec3bb555ee4c46ee66e7c3dd9cc48cab` · clock only `e2277549a61a35dc30fa7d581edeecb2` |
-| `bombd.exe` | `bc49ce807cd58f35177c526be2247f77` | `28be0582b0c9f53eea65a7a62a5d0c5a` |
-| `rebroadcasterlan.exe` | `bb4b9c7e58fbd7ad8d395c7e179f4542` | `7e6eafbaad18a4cca7a62269b29618f6` |
+| `nfs.exe` | `06e4237e74ccd8cd6625b19058ca1e96` | default (60 Hz + 4 GB) `06dd769aa28dfa2d9087c8a95411bcb4` · 30 Hz + 4 GB `854ee558a77f906cf12db38ad73d0065` · 15 Hz + 4 GB `a82ff81a88f62f95e10f4a3f579cb9ef` · without 4 GB: 60 Hz `ebc5ca028929e999a3be9174307a4241`, clock only `e2277549a61a35dc30fa7d581edeecb2` |
+| `bombd.exe` | `bc49ce807cd58f35177c526be2247f77` | `--sleep 1`: `9e8f9306f7ecd2419525fc4f043ab4f9` (without 4 GB `28be0582b0c9f53eea65a7a62a5d0c5a`) |
+| `rebroadcasterlan.exe` | `bb4b9c7e58fbd7ad8d395c7e179f4542` | `--sleep 1`: `d89b541f8da92a27350ae62fce87de0c` (without 4 GB `7e6eafbaad18a4cca7a62269b29618f6`) |
 
 ## Playing over Tailscale
 

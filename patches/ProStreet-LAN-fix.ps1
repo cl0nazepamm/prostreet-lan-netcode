@@ -4,12 +4,15 @@
 #    so your own car judders. 11 spots are switched to timeGetTime() (1 ms resolution).
 # 2. Send rate: your car's position is sent to others 15 times a second; this raises it (default 60),
 #    so opponents are guessed for less time between updates. Both players need it.
+# 3. Large address aware: lets the game use 4 GB instead of 2 GB (the LAN netcode leaks memory while
+#    racing, so this doubles the time before it runs out). -NoLAA turns it off again.
 #
 # Usage: put this file next to nfs.exe, close the game, then run:
 #   powershell -ExecutionPolicy Bypass -File .\ProStreet-LAN-fix.ps1            (60 Hz)
 #   powershell -ExecutionPolicy Bypass -File .\ProStreet-LAN-fix.ps1 -Rate 30   (15 = stock rate)
-# Works on the original exe or one that already has the clock fix. Backup: nfs.exe.before-lanfix
-param([string]$ExePath = (Join-Path $PSScriptRoot 'nfs.exe'), [ValidateSet(15, 20, 30, 40, 60)][int]$Rate = 60)
+# Works on the original exe or an already patched one. Backup: nfs.exe.before-lanfix
+param([string]$ExePath = (Join-Path $PSScriptRoot 'nfs.exe'), [ValidateSet(15, 20, 30, 40, 60)][int]$Rate = 60,
+      [switch]$NoLAA)
 
 $ErrorActionPreference = 'Stop'
 $ImageBase = 0x400000
@@ -69,5 +72,7 @@ if (-not (Test-Path "$ExePath.before-lanfix")) { Copy-Item $ExePath "$ExePath.be
 foreach ($s in $Sites) { Set-Bytes $data ($s[0] + 2) $New }
 if ($Rate -eq 15) { Set-Bytes $data $SendFadd $StockFadd; Set-Bytes $data $RateConst $Pad }
 else { Set-Bytes $data $RateConst ([BitConverter]::GetBytes([double](1.0 / $Rate))); Set-Bytes $data $SendFadd $OurFadd }
+$chars = [BitConverter]::ToInt32($data, 0x3C) + 22        # FILE_HEADER.Characteristics
+if ($NoLAA) { $data[$chars] = $data[$chars] -band 0xDF } else { $data[$chars] = $data[$chars] -bor 0x20 }
 [IO.File]::WriteAllBytes($ExePath, $data)
-Write-Host "Clock fix applied, car update rate $Rate Hz. Backup: $ExePath.before-lanfix"
+Write-Host "Clock fix applied, car update rate $Rate Hz, 4 GB mode $(if ($NoLAA) { 'off' } else { 'on' }). Backup: $ExePath.before-lanfix"

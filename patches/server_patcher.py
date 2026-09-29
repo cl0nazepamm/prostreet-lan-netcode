@@ -6,10 +6,13 @@ Patches (each site is verified against the expected original bytes first):
     sleep   main loop Sleep(10) -> Sleep(SLEEP_MS)  (both idle branches)
     timer   entry-point stub: SetProcessInformation(ProcessPowerThrottling, honor timer res)
             + timeBeginPeriod(1)
-    log     re-enable compiled-out debug log (stub -> printf)  [debug builds only]
+    log     re-enable compiled-out debug log (stub -> printf)  [experiment only: crashes, some call sites
+            don't pass a format string]
   bombd.exe
     sleep   main loop Sleep(10) -> Sleep(SLEEP_MS)
     timer   same entry-point stub
+  both
+    laa     large-address-aware header bit (4 GB instead of 2 GB; buys time against the netcode leak)
 """
 import struct, sys, hashlib, argparse
 import pefile
@@ -66,6 +69,11 @@ class Patcher:
     def set_entry(self, va):
         o = self.pe.OPTIONAL_HEADER.get_file_offset() + 16  # AddressOfEntryPoint
         struct.pack_into('<I', self.data, o, va - self.base)
+
+    def set_laa(self):
+        """IMAGE_FILE_LARGE_ADDRESS_AWARE: 4 GB user address space on 64-bit Windows instead of 2 GB."""
+        o = self.pe.FILE_HEADER.get_file_offset() + 18  # Characteristics
+        struct.pack_into('<H', self.data, o, struct.unpack_from('<H', self.data, o)[0] | 0x0020)
 
     def clear_checksum(self):
         o = self.pe.OPTIONAL_HEADER.get_file_offset() + 64
@@ -132,7 +140,7 @@ def timer_stub(p, cave_va, orig_ep):
     return bytes(c) + blob
 
 
-def patch_rebroadcaster(src, dst, af=True, sleep_ms=None, timer=True, log=False):
+def patch_rebroadcaster(src, dst, af=True, sleep_ms=None, timer=True, log=False, laa=True):
     if hashlib.md5(open(src, 'rb').read()).hexdigest() != REBROADCASTER_MD5:
         raise SystemExit('rebroadcasterlan.exe is not the expected Dec 2007 build')
     p = Patcher(src)
@@ -157,11 +165,13 @@ def patch_rebroadcaster(src, dst, af=True, sleep_ms=None, timer=True, log=False)
         p.set_entry(stub_va)
     if log:
         p.put(0x4473E0, b'\xFF\x25' + struct.pack('<I', p.iat('printf')), orig=b'\xC3\xCC\xCC\xCC\xCC\xCC')
+    if laa:
+        p.set_laa()
     p.clear_checksum()
     p.save(dst)
 
 
-def patch_bombd(src, dst, sleep_ms=None, timer=True):
+def patch_bombd(src, dst, sleep_ms=None, timer=True, laa=True):
     if hashlib.md5(open(src, 'rb').read()).hexdigest() != BOMBD_MD5:
         raise SystemExit('bombd.exe is not the expected Dec 2007 build')
     p = Patcher(src)
@@ -172,6 +182,8 @@ def patch_bombd(src, dst, sleep_ms=None, timer=True):
         cave = p.cave(0xB0)
         p.put(cave, timer_stub(p, cave, orig_ep))
         p.set_entry(cave)
+    if laa:
+        p.set_laa()
     p.clear_checksum()
     p.save(dst)
 
@@ -184,9 +196,11 @@ if __name__ == '__main__':
     ap.add_argument('--no-timer', action='store_true')
     ap.add_argument('--sleep', type=int, default=None)
     ap.add_argument('--log', action='store_true')
+    ap.add_argument('--no-laa', action='store_true')
     a = ap.parse_args()
     if a.which == 'rebroadcaster':
-        patch_rebroadcaster(a.src, a.dst, af=not a.no_af, sleep_ms=a.sleep, timer=not a.no_timer, log=a.log)
+        patch_rebroadcaster(a.src, a.dst, af=not a.no_af, sleep_ms=a.sleep, timer=not a.no_timer, log=a.log,
+                            laa=not a.no_laa)
     else:
-        patch_bombd(a.src, a.dst, sleep_ms=a.sleep, timer=not a.no_timer)
+        patch_bombd(a.src, a.dst, sleep_ms=a.sleep, timer=not a.no_timer, laa=not a.no_laa)
     print('wrote', a.dst)
