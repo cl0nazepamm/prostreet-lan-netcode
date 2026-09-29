@@ -1,11 +1,7 @@
 # NFS ProStreet LAN netcode fixes
 
 Reverse engineering and binary patches for **Need for Speed ProStreet**'s PC LAN mode (EA's December 2007
-LAN patch: `nfs.exe` v1.1 + the `ONLINE\` LAN server) so it works, and plays well, on Windows 10/11 —
-including over Tailscale.
-
-No game binaries are included. The patchers only modify files you already have, and each one verifies the
-exact original bytes at every site before writing anything.
+LAN patch: `nfs.exe` v1.1 + the `ONLINE\` LAN server) 60hz tickrate + FusionFix simrate in LAN. Works with Tailscale
 
 ## What was wrong, and what the patches do
 
@@ -36,8 +32,13 @@ The stock exes aren't large-address-aware, so they die at ~2 GB; with fix 5 the 
 double the racing time, still not a fix). The bombd : rebroadcaster ratio (≈3 : 2)
 matches unreliable packets *sent*, which points at the shared netcode library keeping a per-send record
 (bombd has an `AckPacketRecord` allocation tag) that is never released because unreliable packets are never
-acked — unverified. It exists in the stock game too; 15 Hz just made it slow. Workaround: **File → Restart**
+acked — unverified. It exists in the stock game too; 15 Hz just made it slow. 
+
+Workaround: **File → Restart**
 in the LAN Server window between sessions (and restart the game now and then), or use `-Rate 30`.
+
+It's almost a non issue when playing with friends. Just restart the server window after every race day ends.
+
 
 ## Applying
 
